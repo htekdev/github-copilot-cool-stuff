@@ -10,7 +10,18 @@ The Copilot Supervisor is an intelligent agent that monitors GitHub Pull Request
 
 1. **PowerShell** (Core or Desktop)
 2. **GitHub CLI** (`gh`) - for authentication
+   ```bash
+   # Verify installation
+   gh --version
+   ```
 3. **Copilot CLI** - for AI-powered reviews
+   ```bash
+   # Verify installation
+   copilot --version
+   
+   # Should output something like: github-copilot-cli version X.X.X
+   ```
+   Install from: https://docs.github.com/en/copilot/github-copilot-in-the-cli
 4. **GitHub Personal Access Token** (PAT) with appropriate permissions
 
 ### Authentication

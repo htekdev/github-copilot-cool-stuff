@@ -64,6 +64,16 @@ if (-not $GithubToken) {
     }
 }
 
+# Verify Copilot CLI is available
+try {
+    $copilotVersion = copilot --version 2>&1
+    Write-Host "Using Copilot CLI: $copilotVersion" -ForegroundColor Gray
+}
+catch {
+    Write-Error "Copilot CLI not found. Please install GitHub Copilot CLI from https://docs.github.com/en/copilot/github-copilot-in-the-cli"
+    exit 1
+}
+
 $headers = @{
     "Authorization" = "Bearer $GithubToken"
     "Accept" = "application/vnd.github+json"
@@ -98,6 +108,9 @@ function Get-PRTimeline {
             
             # Check for next page via Link header
             $linkHeader = $response.Headers["Link"]
+            if ($linkHeader -and $linkHeader -is [array]) {
+                $linkHeader = $linkHeader[0]
+            }
             if (-not $linkHeader -or $linkHeader -notmatch 'rel="next"') { break }
             
             $page++
@@ -174,6 +187,9 @@ function Get-PRComments {
             $allComments += $comments
             
             $linkHeader = $response.Headers["Link"]
+            if ($linkHeader -and $linkHeader -is [array]) {
+                $linkHeader = $linkHeader[0]
+            }
             if (-not $linkHeader -or $linkHeader -notmatch 'rel="next"') { break }
             
             $page++
@@ -202,6 +218,9 @@ function Get-PRCommits {
             $allCommits += $commits
             
             $linkHeader = $response.Headers["Link"]
+            if ($linkHeader -and $linkHeader -is [array]) {
+                $linkHeader = $linkHeader[0]
+            }
             if (-not $linkHeader -or $linkHeader -notmatch 'rel="next"') { break }
             
             $page++
@@ -230,6 +249,9 @@ function Get-PRFiles {
             $allFiles += $files
             
             $linkHeader = $response.Headers["Link"]
+            if ($linkHeader -and $linkHeader -is [array]) {
+                $linkHeader = $linkHeader[0]
+            }
             if (-not $linkHeader -or $linkHeader -notmatch 'rel="next"') { break }
             
             $page++
@@ -307,15 +329,14 @@ Provide only the JSON output, no other text.
     $reviewPrompt | Out-File -FilePath $tempPromptFile.FullName -Encoding UTF8
     
     try {
-        # Use Copilot CLI to perform review
+        # Use Copilot CLI to perform review (without --yolo for safety)
         Write-Host "Invoking Copilot CLI for review..." -ForegroundColor Cyan
         
         # Run copilot with the prompt
-        $reviewOutput = copilot --yolo -p "$(Get-Content $tempPromptFile.FullName -Raw)" 2>&1
+        $reviewOutput = copilot -p "$(Get-Content $tempPromptFile.FullName -Raw)" 2>&1
         
         # Try to extract JSON from output
-        $jsonMatch = $reviewOutput -match '(?s)\{.*\}'
-        if ($jsonMatch) {
+        if ($reviewOutput -match '(?s)\{.*\}') {
             $jsonText = [regex]::Match($reviewOutput, '(?s)\{.*\}').Value
             $reviewResult = $jsonText | ConvertFrom-Json
             return $reviewResult
