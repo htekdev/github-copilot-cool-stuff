@@ -49,6 +49,10 @@ Supervisor agent that acts as a proxy for the user, reviewing Copilot's work aga
 - `fix` - Issues identified that Copilot can address (posts feedback with @copilot mention)
 - `escalate` - Critical issues or stuck state requiring human intervention (mentions user + requests file review)
 
+**Documentation:**
+- [Comprehensive Usage Guide](docs/SUPERVISOR_GUIDE.md)
+- [Example Specification](examples/sample-spec.md)
+
 ## License
 
 MIT
