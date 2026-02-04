@@ -32,7 +32,7 @@ Supervisor agent that monitors Copilot's work and launches comprehensive PR revi
 ```
 
 **Features:**
-- **Monitors Copilot Work**: Watches for \copilot_work_started\ and \copilot_work_finished\ events
+- **Monitors Copilot Work**: Watches for `copilot_work_started` and `copilot_work_finished` events
 - **Launches Autonomous Review**: Creates temp folder and launches Copilot CLI with comprehensive review instructions
 - **Full Copilot Autonomy**: Copilot uses its GitHub tools to checkout PR, run tests, verify coverage, and validate app works
 - **Spec Compliance**: Copilot verifies implementation matches all specification requirements

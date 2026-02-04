@@ -195,9 +195,16 @@ while ($true) {
         Write-Host ""
         
         # Create temp folder for Copilot session
-        $tempFolderPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString())
-        $tempFolder = New-Item -ItemType Directory -Path $tempFolderPath
-        Write-Host "Created temp folder: $($tempFolder.FullName)" -ForegroundColor Gray
+        try {
+            $tempFolderPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString())
+            $tempFolder = New-Item -ItemType Directory -Path $tempFolderPath -ErrorAction Stop
+            Write-Host "Created temp folder: $($tempFolder.FullName)" -ForegroundColor Gray
+        }
+        catch {
+            Write-Error "Failed to create temp folder: $_"
+            $lastHandledFinishedCount = $status.FinishedCount
+            continue
+        }
         
         try {
             # Change to temp folder
@@ -243,7 +250,17 @@ Use your full capabilities and GitHub tools to perform this review autonomously.
             
             try {
                 # Launch Copilot CLI with the review prompt from file
-                copilot -p "$(Get-Content $tempPromptFile.FullName -Raw)"
+                $copilotOutput = copilot -p "$(Get-Content $tempPromptFile.FullName -Raw)" 2>&1
+                
+                # Check if command succeeded
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "Copilot CLI exited with code $LASTEXITCODE"
+                    Write-Host "Output: $copilotOutput" -ForegroundColor Yellow
+                }
+            }
+            catch {
+                Write-Error "Failed to launch Copilot CLI: $_"
+                Write-Host "Make sure Copilot CLI is installed and you're authenticated." -ForegroundColor Yellow
             }
             finally {
                 Remove-Item $tempPromptFile.FullName -ErrorAction SilentlyContinue
