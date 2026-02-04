@@ -86,10 +86,23 @@ Copilot uses its full capabilities and GitHub tools to:
 
 ### 4. Autonomous Decision Making
 
-Copilot makes all decisions on its own:
-- If gaps found: Posts detailed comment explaining what needs fixing
-- If ready: Posts comment confirming production readiness
-- No scoring, no predefined logic - full Copilot autonomy
+Copilot makes all decisions on its own and posts comments based on what it finds:
+
+**Fixable Issues** - Uses `@copilot` mention:
+- When gaps or issues can be addressed by the coding agent
+- Example: "@copilot Please add unit tests for the authentication module to reach 80% coverage"
+- Example: "@copilot The login endpoint is missing input validation as specified"
+
+**Critical Issues** - Mentions repository owner:
+- When human review or decisions are needed
+- Example: "@owner Critical security vulnerability found - requires human review"
+- Example: "@owner Architecture decision needed: current approach doesn't scale"
+
+**Production Ready** - No mentions needed:
+- When everything passes all checks
+- Example: "✅ PR is production-ready. All tests pass, 85% coverage, app verified working."
+
+No scoring, no predefined logic - full Copilot autonomy with clear escalation guidance.
 
 ## Specification File Format
 

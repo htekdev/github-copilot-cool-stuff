@@ -37,7 +37,7 @@ Supervisor agent that monitors Copilot's work and launches comprehensive PR revi
 - **Full Copilot Autonomy**: Copilot uses its GitHub tools to checkout PR, run tests, verify coverage, and validate app works
 - **Spec Compliance**: Copilot verifies implementation matches all specification requirements
 - **Production Readiness**: Ensures tests pass, code coverage is high, app works, and spec is well-documented
-- **Autonomous Feedback**: Copilot decides on its own whether to post comments on gaps or confirm PR is ready
+- **Autonomous Feedback**: Copilot decides on its own and uses `@copilot` for fixable issues, mentions owner for critical issues, or confirms readiness
 
 **How It Works:**
 1. Monitors PR for Copilot completion events
@@ -49,8 +49,9 @@ Supervisor agent that monitors Copilot's work and launches comprehensive PR revi
    - Runs tests and validates coverage
    - Verifies the app actually works
    - Validates spec compliance
-   - Posts comments on PR if gaps found
-   - Confirms readiness if everything looks good
+   - Posts `@copilot` comments for fixable gaps
+   - Mentions owner for critical issues
+   - Confirms readiness if everything production-ready
 
 **Documentation:**
 - [Comprehensive Usage Guide](docs/SUPERVISOR_GUIDE.md)

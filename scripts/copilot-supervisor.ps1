@@ -229,14 +229,22 @@ YOUR REVIEW CHECKLIST:
 7. Look for any security vulnerabilities or code quality issues
 8. Validate all claims made in commit messages and PR description
 
-If you find any gaps, issues, or missing requirements:
-- Post a detailed comment on the PR explaining what needs to be fixed
-- Be specific about what's missing or wrong
-- Provide actionable feedback
+WHEN TO POST COMMENTS:
+
+If you find gaps or issues that the coding agent can fix:
+- Post a comment starting with "@copilot" followed by specific instructions
+- Example: "@copilot Please add unit tests for the authentication module to reach 80% coverage"
+- Example: "@copilot The login endpoint is missing input validation as specified in requirements"
+
+If you find critical issues requiring human review or decisions:
+- Post a comment starting with "@$Owner" (the repository owner)
+- Example: "@$Owner Critical security vulnerability found in authentication - requires human review"
+- Example: "@$Owner Architecture decision needed: current approach doesn't scale as per spec"
 
 If everything looks good and production-ready:
-- Post a comment confirming the PR is ready
+- Post a comment confirming the PR is ready (no @mentions needed)
 - Highlight what was verified (tests passing, coverage, app working, etc.)
+- Example: "✅ PR is production-ready. All tests pass, 85% coverage, app verified working, spec compliant."
 
 Use your full capabilities and GitHub tools to perform this review autonomously. Make all decisions on your own.
 "@
