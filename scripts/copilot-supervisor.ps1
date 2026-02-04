@@ -195,7 +195,8 @@ while ($true) {
         Write-Host ""
         
         # Create temp folder for Copilot session
-        $tempFolder = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemType Directory -Path $_ }
+        $tempFolderPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString())
+        $tempFolder = New-Item -ItemType Directory -Path $tempFolderPath
         Write-Host "Created temp folder: $($tempFolder.FullName)" -ForegroundColor Gray
         
         try {
@@ -236,8 +237,17 @@ Use your full capabilities and GitHub tools to perform this review autonomously.
             Write-Host "Launching Copilot CLI for comprehensive review..." -ForegroundColor Cyan
             Write-Host ""
             
-            # Launch Copilot CLI with the review prompt
-            copilot -p $reviewPrompt
+            # Create temp file for prompt to avoid shell injection
+            $tempPromptFile = New-TemporaryFile
+            $reviewPrompt | Out-File -FilePath $tempPromptFile.FullName -Encoding UTF8
+            
+            try {
+                # Launch Copilot CLI with the review prompt from file
+                copilot -p "$(Get-Content $tempPromptFile.FullName -Raw)"
+            }
+            finally {
+                Remove-Item $tempPromptFile.FullName -ErrorAction SilentlyContinue
+            }
             
             Write-Host ""
             Write-Host "Review session completed" -ForegroundColor Green
