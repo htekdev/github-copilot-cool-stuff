@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Copilot Supervisor is an intelligent agent that monitors GitHub Pull Requests and provides automated quality reviews of Copilot's work. It acts as a proxy for the user, ensuring high-quality code delivery while minimizing human intervention.
+The Copilot Supervisor monitors GitHub Pull Requests and launches comprehensive autonomous review sessions after Copilot finishes coding. It creates a temp folder and launches Copilot CLI with full autonomy to review the PR, verify spec compliance, run tests, validate coverage, and ensure production readiness.
 
 ## Quick Start
 
@@ -14,7 +14,7 @@ The Copilot Supervisor is an intelligent agent that monitors GitHub Pull Request
    # Verify installation
    gh --version
    ```
-3. **Copilot CLI** - for AI-powered reviews
+3. **Copilot CLI** - for autonomous reviews
    ```bash
    # Verify installation
    copilot --version
@@ -22,7 +22,6 @@ The Copilot Supervisor is an intelligent agent that monitors GitHub Pull Request
    # Should output something like: github-copilot-cli version X.X.X
    ```
    Install from: https://docs.github.com/en/copilot/github-copilot-in-the-cli
-4. **GitHub Personal Access Token** (PAT) with appropriate permissions
 
 ### Authentication
 
@@ -43,8 +42,7 @@ $env:GITHUB_TOKEN = "your-token-here"
   -Owner htekdev `
   -Repo myproject `
   -PRNumber 42 `
-  -SpecFile ./requirements.md `
-  -EscalateToUser htekdev
+  -SpecFile ./requirements.md
 ```
 
 ### With Custom Poll Interval
@@ -55,7 +53,6 @@ $env:GITHUB_TOKEN = "your-token-here"
   -Repo myproject `
   -PRNumber 42 `
   -SpecFile ./requirements.md `
-  -EscalateToUser htekdev `
   -PollIntervalSeconds 60
 ```
 
@@ -68,53 +65,31 @@ The supervisor continuously monitors the PR for Copilot work completion events:
 - Tracks `copilot_work_finished` events
 - Triggers review when Copilot finishes a work cycle
 
-### 2. Context Gathering
+### 2. Launch Autonomous Review
 
-When Copilot finishes work, the supervisor gathers comprehensive context:
-- **PR Diff**: All code changes in the PR
-- **Comments**: All discussion and feedback
-- **Commits**: Commit history and messages
-- **Files Changed**: List of modified files with change statistics
-- **Spec File**: Your requirements specification
+When Copilot finishes work:
+1. Creates a temporary working folder
+2. Launches Copilot CLI in that folder
+3. Provides comprehensive review instructions with the spec
 
-### 3. Multi-Dimensional Review
+### 3. Copilot's Autonomous Review
 
-The supervisor performs an AI-powered review across three dimensions:
+Copilot uses its full capabilities and GitHub tools to:
+- **Checkout the PR** - Uses GitHub tools to access the PR code
+- **Examine Changes** - Reviews all code modifications
+- **Run Tests** - Executes test suites and validates results
+- **Check Coverage** - Verifies code coverage is high (>80%)
+- **Verify App Works** - Runs the application to ensure functionality
+- **Validate Spec** - Confirms implementation matches requirements
+- **Security & Quality** - Identifies vulnerabilities and code issues
+- **Post Feedback** - Leaves PR comments if gaps found, or confirms readiness
 
-#### Spec Compliance (0-100)
-- Does the implementation match requirements?
-- Are all specified features implemented?
-- Are acceptance criteria met?
+### 4. Autonomous Decision Making
 
-#### Code Quality (0-100)
-- Is code well-structured and maintainable?
-- Does it follow best practices?
-- Are there code smells or anti-patterns?
-
-#### Security (0-100)
-- Are there security vulnerabilities?
-- Is input properly validated?
-- Are credentials handled securely?
-
-### 4. Decision Making
-
-Based on the review results, the supervisor decides:
-
-#### ✅ Continue (Avg Score ≥ 90)
-- All quality dimensions meet standards
-- Posts approval comment
-- Lets Copilot proceed to next task
-
-#### 🔧 Fix (70 ≤ Avg Score < 90)
-- Issues identified that can be addressed
-- Posts feedback with `@copilot` mention
-- Provides specific guidance on fixes needed
-
-#### 🚨 Escalate (Avg Score < 70 or Critical Issues)
-- Critical issues detected
-- Work appears stuck or incomplete
-- Posts comment with `@username` mention
-- Requests human review on affected files
+Copilot makes all decisions on its own:
+- If gaps found: Posts detailed comment explaining what needs fixing
+- If ready: Posts comment confirming production readiness
+- No scoring, no predefined logic - full Copilot autonomy
 
 ## Specification File Format
 
@@ -152,8 +127,8 @@ Create a markdown file describing your requirements:
 
 1. **Be Specific**: Clear, measurable requirements
 2. **Include Acceptance Criteria**: Define "done"
-3. **Specify Standards**: Code quality, security requirements
-4. **Prioritize**: Mark critical vs. nice-to-have features
+3. **Specify Standards**: Code quality, security requirements, coverage targets
+4. **Document Tests**: Expected test behaviors and coverage goals
 
 ### When to Use the Supervisor
 
@@ -161,12 +136,11 @@ Create a markdown file describing your requirements:
 - Long-running, multi-phase implementations
 - Security-critical features
 - Complex specifications with many requirements
-- When you want to minimize interruptions
+- When you want Copilot to autonomously verify production readiness
 
 ❌ **Not Recommended**:
 - Quick bug fixes or trivial changes
-- Exploratory/experimental work
-- When immediate human judgment is needed
+- When you want manual review control
 
 ## Troubleshooting
 
@@ -178,11 +152,6 @@ Create a markdown file describing your requirements:
 - Verify the path to your specification file
 - Use absolute paths or paths relative to script location
 
-### Review fails or returns no JSON
-- Check Copilot CLI is installed: `copilot --version`
-- Verify PR has actual changes to review
-- Check network connectivity to GitHub
-
 ### Supervisor doesn't detect Copilot completion
 - Verify Copilot is actually working on the PR
 - Check PR timeline for `copilot_work_started/finished` events
@@ -192,11 +161,11 @@ Create a markdown file describing your requirements:
 
 1. **Setup**: Create your spec file (`requirements.md`)
 2. **Launch**: Start the supervisor on your PR
-3. **Work**: Copilot implements features based on tasks
-4. **Review**: Supervisor reviews each completion cycle
-5. **Iterate**: Copilot addresses feedback automatically
-6. **Escalate**: Human reviews only when critical issues arise
-7. **Complete**: Supervisor confirms all requirements met
+3. **Work**: Copilot implements features
+4. **Trigger**: Supervisor detects Copilot finished
+5. **Review**: Supervisor launches Copilot for autonomous review
+6. **Feedback**: Copilot posts comments if gaps found
+7. **Complete**: Copilot confirms when production-ready
 
 ## License
 

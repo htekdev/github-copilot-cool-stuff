@@ -20,7 +20,7 @@ Monitors a PR for Copilot completion and launches a review session. Useful for o
 
 ### copilot-supervisor.ps1
 
-Supervisor agent that acts as a proxy for the user, reviewing Copilot's work against specifications and providing intelligent feedback. Only escalates to humans when necessary.
+Supervisor agent that monitors Copilot's work and launches comprehensive PR review sessions. After Copilot finishes coding, it creates a temp folder and launches Copilot CLI with full autonomy to review the PR, verify spec compliance, check tests, validate coverage, and ensure production readiness.
 
 **Usage:**
 ```powershell
@@ -28,26 +28,29 @@ Supervisor agent that acts as a proxy for the user, reviewing Copilot's work aga
   -Owner <owner> `
   -Repo <repo> `
   -PRNumber <pr-number> `
-  -SpecFile <path-to-spec-file> `
-  -EscalateToUser <github-username>
+  -SpecFile <path-to-spec-file>
 ```
 
 **Features:**
-- **Multi-dimensional Quality Review**: Evaluates spec compliance, code quality, and security
-- **Intelligent Feedback**: Provides actionable feedback to Copilot to continue or fix issues
-- **Smart Escalation**: Only involves humans when critical issues are detected or work is stuck
-- **Comprehensive Context**: Reviews PR diff, comments, commits, and files changed
-- **Automated Decision Making**: Determines whether work is complete, needs fixes, or requires escalation
+- **Monitors Copilot Work**: Watches for \copilot_work_started\ and \copilot_work_finished\ events
+- **Launches Autonomous Review**: Creates temp folder and launches Copilot CLI with comprehensive review instructions
+- **Full Copilot Autonomy**: Copilot uses its GitHub tools to checkout PR, run tests, verify coverage, and validate app works
+- **Spec Compliance**: Copilot verifies implementation matches all specification requirements
+- **Production Readiness**: Ensures tests pass, code coverage is high, app works, and spec is well-documented
+- **Autonomous Feedback**: Copilot decides on its own whether to post comments on gaps or confirm PR is ready
 
-**Review Dimensions:**
-1. **Spec Compliance** - Validates implementation matches specification requirements
-2. **Code Quality** - Assesses code structure, maintainability, and best practices
-3. **Security** - Identifies vulnerabilities and security concerns
-
-**Actions:**
-- `continue` - Work is complete and meets all quality standards (posts approval comment)
-- `fix` - Issues identified that Copilot can address (posts feedback with @copilot mention)
-- `escalate` - Critical issues or stuck state requiring human intervention (mentions user + requests file review)
+**How It Works:**
+1. Monitors PR for Copilot completion events
+2. When Copilot finishes, creates a temporary working folder
+3. Launches Copilot CLI in that folder with comprehensive review instructions
+4. Copilot autonomously:
+   - Checks out the PR
+   - Examines all code changes
+   - Runs tests and validates coverage
+   - Verifies the app actually works
+   - Validates spec compliance
+   - Posts comments on PR if gaps found
+   - Confirms readiness if everything looks good
 
 **Documentation:**
 - [Comprehensive Usage Guide](docs/SUPERVISOR_GUIDE.md)

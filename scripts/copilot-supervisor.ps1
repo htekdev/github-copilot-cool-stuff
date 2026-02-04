@@ -1,11 +1,12 @@
 <#
 .SYNOPSIS
-    Supervisor agent that reviews Copilot's PR work against user specs and provides feedback.
+    Supervisor agent that monitors Copilot's work and launches comprehensive PR review sessions.
 
 .DESCRIPTION
-    Acts as a proxy for the user by monitoring PR changes, validating against spec files,
-    performing multi-dimensional quality reviews (spec compliance, code quality, security),
-    and providing actionable feedback to Copilot. Only escalates to humans when necessary.
+    Waits for Copilot to finish coding, then launches a new Copilot CLI session in a temp folder
+    to perform a full PR review. Copilot uses its GitHub tools to checkout the PR, verify spec
+    compliance, check tests, validate code coverage, and ensure the app works. Posts comments
+    on the PR if any gaps are found.
 
 .PARAMETER Owner
     GitHub repository owner
@@ -19,9 +20,6 @@
 .PARAMETER SpecFile
     Path to the specification file that defines requirements
 
-.PARAMETER EscalateToUser
-    GitHub username to @mention when escalation is needed
-
 .PARAMETER PollIntervalSeconds
     How often to check PR status (default: 30 seconds)
 
@@ -29,7 +27,7 @@
     GitHub PAT (uses 'gh auth token' if not provided)
 
 .EXAMPLE
-    .\copilot-supervisor.ps1 -Owner htekdev -Repo myrepo -PRNumber 1 -SpecFile ./spec.md -EscalateToUser htekdev
+    .\copilot-supervisor.ps1 -Owner htekdev -Repo myrepo -PRNumber 1 -SpecFile ./spec.md
 #>
 
 param(
@@ -44,9 +42,6 @@ param(
     
     [Parameter(Mandatory=$true)]
     [string]$SpecFile,
-    
-    [Parameter(Mandatory=$true)]
-    [string]$EscalateToUser,
     
     [Parameter(Mandatory=$false)]
     [int]$PollIntervalSeconds = 30,
@@ -153,307 +148,6 @@ function Get-PRDetails {
     }
 }
 
-function Get-PRDiff {
-    param([int]$PRNum)
-    
-    try {
-        $response = Invoke-WebRequest -Uri "$baseUrl/pulls/$PRNum" -Headers @{
-            "Authorization" = "Bearer $GithubToken"
-            "Accept" = "application/vnd.github.v3.diff"
-            "X-GitHub-Api-Version" = "2022-11-28"
-        } -Method Get
-        
-        return $response.Content
-    }
-    catch {
-        Write-Warning "Error fetching PR diff: $_"
-        return ""
-    }
-}
-
-function Get-PRComments {
-    param([int]$PRNum)
-    
-    $allComments = @()
-    $page = 1
-    
-    try {
-        while ($true) {
-            $response = Invoke-WebRequest -Uri "$baseUrl/issues/$PRNum/comments?per_page=100&page=$page" -Headers $headers -Method Get
-            $comments = $response.Content | ConvertFrom-Json
-            
-            if ($comments.Count -eq 0) { break }
-            
-            $allComments += $comments
-            
-            $linkHeader = $response.Headers["Link"]
-            if ($linkHeader -and $linkHeader -is [array]) {
-                $linkHeader = $linkHeader[0]
-            }
-            if (-not $linkHeader -or $linkHeader -notmatch 'rel="next"') { break }
-            
-            $page++
-        }
-    }
-    catch {
-        Write-Warning "Error fetching comments: $_"
-    }
-    
-    return $allComments
-}
-
-function Get-PRCommits {
-    param([int]$PRNum)
-    
-    $allCommits = @()
-    $page = 1
-    
-    try {
-        while ($true) {
-            $response = Invoke-WebRequest -Uri "$baseUrl/pulls/$PRNum/commits?per_page=100&page=$page" -Headers $headers -Method Get
-            $commits = $response.Content | ConvertFrom-Json
-            
-            if ($commits.Count -eq 0) { break }
-            
-            $allCommits += $commits
-            
-            $linkHeader = $response.Headers["Link"]
-            if ($linkHeader -and $linkHeader -is [array]) {
-                $linkHeader = $linkHeader[0]
-            }
-            if (-not $linkHeader -or $linkHeader -notmatch 'rel="next"') { break }
-            
-            $page++
-        }
-    }
-    catch {
-        Write-Warning "Error fetching commits: $_"
-    }
-    
-    return $allCommits
-}
-
-function Get-PRFiles {
-    param([int]$PRNum)
-    
-    $allFiles = @()
-    $page = 1
-    
-    try {
-        while ($true) {
-            $response = Invoke-WebRequest -Uri "$baseUrl/pulls/$PRNum/files?per_page=100&page=$page" -Headers $headers -Method Get
-            $files = $response.Content | ConvertFrom-Json
-            
-            if ($files.Count -eq 0) { break }
-            
-            $allFiles += $files
-            
-            $linkHeader = $response.Headers["Link"]
-            if ($linkHeader -and $linkHeader -is [array]) {
-                $linkHeader = $linkHeader[0]
-            }
-            if (-not $linkHeader -or $linkHeader -notmatch 'rel="next"') { break }
-            
-            $page++
-        }
-    }
-    catch {
-        Write-Warning "Error fetching files: $_"
-    }
-    
-    return $allFiles
-}
-
-function Invoke-SupervisorReview {
-    param(
-        [string]$Spec,
-        [string]$Diff,
-        [array]$Comments,
-        [array]$Commits,
-        [array]$Files
-    )
-    
-    # Build comprehensive review prompt
-    $reviewPrompt = @"
-You are a supervisor agent reviewing Copilot's work on PR #$PRNumber in $Owner/$Repo.
-
-Your job is to perform a multi-dimensional quality review and provide actionable feedback.
-
-SPECIFICATION:
-$Spec
-
-PR DIFF:
-$Diff
-
-RECENT COMMENTS (last 5):
-$($Comments | Select-Object -Last 5 | ForEach-Object { "- [$($_.user.login)] $($_.body)" } | Out-String)
-
-COMMITS (last 5):
-$($Commits | Select-Object -Last 5 | ForEach-Object { "- $($_.sha.Substring(0,7)): $($_.commit.message)" } | Out-String)
-
-FILES CHANGED:
-$($Files | ForEach-Object { "- $($_.filename) (+$($_.additions)/-$($_.deletions))" } | Out-String)
-
-REVIEW DIMENSIONS:
-1. Spec Compliance: Does the implementation match the specification requirements?
-2. Code Quality: Is the code well-structured, maintainable, and following best practices?
-3. Security: Are there any security vulnerabilities or concerns?
-
-OUTPUT FORMAT (JSON):
-{
-  "overall_status": "complete|incomplete|needs_fixes|escalate",
-  "spec_compliance": {
-    "score": 0-100,
-    "issues": ["list of issues"],
-    "missing_requirements": ["list of missing items"]
-  },
-  "code_quality": {
-    "score": 0-100,
-    "issues": ["list of issues"]
-  },
-  "security": {
-    "score": 0-100,
-    "vulnerabilities": ["list of vulnerabilities"],
-    "concerns": ["list of concerns"]
-  },
-  "recommendation": "continue|fix|escalate",
-  "feedback": "Detailed feedback for Copilot",
-  "escalation_reason": "If escalate, why?"
-}
-
-Provide only the JSON output, no other text.
-"@
-
-    # Create temp file for prompt
-    $tempPromptFile = New-TemporaryFile
-    $reviewPrompt | Out-File -FilePath $tempPromptFile.FullName -Encoding UTF8
-    
-    try {
-        # Use Copilot CLI to perform review (without --yolo for safety)
-        Write-Host "Invoking Copilot CLI for review..." -ForegroundColor Cyan
-        
-        # Run copilot with the prompt
-        $reviewOutput = copilot -p "$(Get-Content $tempPromptFile.FullName -Raw)" 2>&1
-        
-        # Try to extract JSON from output
-        if ($reviewOutput -match '(?s)\{.*\}') {
-            $jsonText = [regex]::Match($reviewOutput, '(?s)\{.*\}').Value
-            $reviewResult = $jsonText | ConvertFrom-Json
-            return $reviewResult
-        }
-        else {
-            Write-Warning "Could not parse JSON from Copilot output"
-            return $null
-        }
-    }
-    catch {
-        Write-Warning "Error during review: $_"
-        return $null
-    }
-    finally {
-        Remove-Item $tempPromptFile.FullName -ErrorAction SilentlyContinue
-    }
-}
-
-function Invoke-Decision {
-    param([object]$ReviewResult)
-    
-    if (-not $ReviewResult) {
-        return @{
-            Action = "wait"
-            Message = "Review could not be completed. Will retry."
-        }
-    }
-    
-    # Determine action based on review result
-    $action = "continue"
-    $message = ""
-    
-    switch ($ReviewResult.recommendation) {
-        "continue" {
-            $action = "continue"
-            $message = "✅ Work looks good! " + $ReviewResult.feedback
-        }
-        "fix" {
-            $action = "fix"
-            $message = "@copilot " + $ReviewResult.feedback
-        }
-        "escalate" {
-            $action = "escalate"
-            $message = "@$EscalateToUser " + $ReviewResult.feedback + "`n`nEscalation reason: " + $ReviewResult.escalation_reason
-        }
-        default {
-            # Check scores to make decision
-            $avgScore = ($ReviewResult.spec_compliance.score + $ReviewResult.code_quality.score + $ReviewResult.security.score) / 3
-            
-            if ($avgScore -ge 90) {
-                $action = "continue"
-                $message = "✅ Review complete. All quality dimensions look good."
-            }
-            elseif ($avgScore -ge 70) {
-                $action = "fix"
-                $message = "@copilot Please address the following issues:`n" + $ReviewResult.feedback
-            }
-            else {
-                $action = "escalate"
-                $message = "@$EscalateToUser Critical issues detected that require human review.`n" + $ReviewResult.feedback
-            }
-        }
-    }
-    
-    return @{
-        Action = $action
-        Message = $message
-        ReviewResult = $ReviewResult
-    }
-}
-
-function Post-PRComment {
-    param(
-        [int]$PRNum,
-        [string]$Comment
-    )
-    
-    try {
-        $body = @{
-            body = $Comment
-        } | ConvertTo-Json
-        
-        $response = Invoke-RestMethod -Uri "$baseUrl/issues/$PRNum/comments" -Headers $headers -Method Post -Body $body -ContentType "application/json"
-        
-        Write-Host "Comment posted successfully" -ForegroundColor Green
-        return $true
-    }
-    catch {
-        Write-Warning "Error posting comment: $_"
-        return $false
-    }
-}
-
-function Request-FileReview {
-    param(
-        [int]$PRNum,
-        [string]$Username,
-        [array]$Files
-    )
-    
-    try {
-        # Request review from user
-        $reviewers = @{
-            reviewers = @($Username)
-        } | ConvertTo-Json
-        
-        $response = Invoke-RestMethod -Uri "$baseUrl/pulls/$PRNum/requested_reviewers" -Headers $headers -Method Post -Body $reviewers -ContentType "application/json"
-        
-        Write-Host "Review requested from @$Username" -ForegroundColor Green
-        return $true
-    }
-    catch {
-        Write-Warning "Error requesting review: $_"
-        return $false
-    }
-}
-
 # Main loop
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
@@ -462,7 +156,6 @@ Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  Repository:    $Owner/$Repo"
 Write-Host "  PR Number:     #$PRNumber"
 Write-Host "  Spec File:     $SpecFile"
-Write-Host "  Escalate To:   @$EscalateToUser"
 Write-Host "  Poll Interval: ${PollIntervalSeconds}s"
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
@@ -498,63 +191,61 @@ while ($true) {
     
     if ($status.IsDone -and $status.FinishedCount -gt $lastHandledFinishedCount) {
         Write-Host ""
-        Write-Host "*** COPILOT FINISHED - STARTING REVIEW ***" -ForegroundColor Green
+        Write-Host "*** COPILOT FINISHED - LAUNCHING REVIEW ***" -ForegroundColor Green
         Write-Host ""
         
-        # Gather all PR context
-        Write-Host "Gathering PR context..." -ForegroundColor Cyan
-        $diff = Get-PRDiff -PRNum $PRNumber
-        $comments = Get-PRComments -PRNum $PRNumber
-        $commits = Get-PRCommits -PRNum $PRNumber
-        $files = Get-PRFiles -PRNum $PRNumber
+        # Create temp folder for Copilot session
+        $tempFolder = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemType Directory -Path $_ }
+        Write-Host "Created temp folder: $($tempFolder.FullName)" -ForegroundColor Gray
         
-        Write-Host "  - Diff: $($diff.Length) chars"
-        Write-Host "  - Comments: $($comments.Count)"
-        Write-Host "  - Commits: $($commits.Count)"
-        Write-Host "  - Files: $($files.Count)"
-        Write-Host ""
-        
-        # Perform review
-        Write-Host "Performing multi-dimensional review..." -ForegroundColor Cyan
-        $reviewResult = Invoke-SupervisorReview -Spec $specContent -Diff $diff -Comments $comments -Commits $commits -Files $files
-        
-        if ($reviewResult) {
-            Write-Host "Review completed" -ForegroundColor Green
-            Write-Host "  - Spec Compliance: $($reviewResult.spec_compliance.score)/100"
-            Write-Host "  - Code Quality: $($reviewResult.code_quality.score)/100"
-            Write-Host "  - Security: $($reviewResult.security.score)/100"
-            Write-Host "  - Recommendation: $($reviewResult.recommendation)"
+        try {
+            # Change to temp folder
+            Push-Location $tempFolder.FullName
+            
+            # Build comprehensive review prompt for Copilot
+            $reviewPrompt = @"
+You are a supervisor agent reviewing PR #$PRNumber in $Owner/$Repo.
+
+Your task is to perform a comprehensive review to bring this PR to full production readiness. Use your GitHub tools to checkout the PR, examine the code, run tests, and verify everything works.
+
+SPECIFICATION:
+$specContent
+
+YOUR REVIEW CHECKLIST:
+1. Checkout the PR and examine all changes
+2. Verify the implementation matches the specification requirements
+3. Run all tests and ensure they pass
+4. Check code coverage is high (aim for >80%)
+5. Verify the application actually works (run it if possible)
+6. Ensure the specification is well-documented on completion
+7. Look for any security vulnerabilities or code quality issues
+8. Validate all claims made in commit messages and PR description
+
+If you find any gaps, issues, or missing requirements:
+- Post a detailed comment on the PR explaining what needs to be fixed
+- Be specific about what's missing or wrong
+- Provide actionable feedback
+
+If everything looks good and production-ready:
+- Post a comment confirming the PR is ready
+- Highlight what was verified (tests passing, coverage, app working, etc.)
+
+Use your full capabilities and GitHub tools to perform this review autonomously. Make all decisions on your own.
+"@
+            
+            Write-Host "Launching Copilot CLI for comprehensive review..." -ForegroundColor Cyan
             Write-Host ""
             
-            # Make decision
-            Write-Host "Making decision..." -ForegroundColor Cyan
-            $decision = Invoke-Decision -ReviewResult $reviewResult
+            # Launch Copilot CLI with the review prompt
+            copilot -p $reviewPrompt
             
-            Write-Host "Decision: $($decision.Action)" -ForegroundColor Cyan
             Write-Host ""
-            
-            # Take action
-            switch ($decision.Action) {
-                "continue" {
-                    Write-Host "Posting approval comment..." -ForegroundColor Green
-                    Post-PRComment -PRNum $PRNumber -Comment $decision.Message
-                }
-                "fix" {
-                    Write-Host "Posting feedback to Copilot..." -ForegroundColor Yellow
-                    Post-PRComment -PRNum $PRNumber -Comment $decision.Message
-                }
-                "escalate" {
-                    Write-Host "Escalating to human..." -ForegroundColor Red
-                    Post-PRComment -PRNum $PRNumber -Comment $decision.Message
-                    Request-FileReview -PRNum $PRNumber -Username $EscalateToUser -Files $files
-                }
-                "wait" {
-                    Write-Host "Waiting for next cycle..." -ForegroundColor Gray
-                }
-            }
+            Write-Host "Review session completed" -ForegroundColor Green
         }
-        else {
-            Write-Warning "Review failed, will retry on next cycle"
+        finally {
+            # Return to original location and cleanup
+            Pop-Location
+            Remove-Item -Path $tempFolder.FullName -Recurse -Force -ErrorAction SilentlyContinue
         }
         
         # Mark as handled
