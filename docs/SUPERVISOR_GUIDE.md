@@ -95,8 +95,9 @@ Copilot makes all decisions on its own and posts comments based on what it finds
 
 **Critical Issues** - Mentions repository owner:
 - When human review or decisions are needed
-- Example: "@owner Critical security vulnerability found - requires human review"
-- Example: "@owner Architecture decision needed: current approach doesn't scale"
+- The supervisor will use the actual repository owner's username (e.g., @htekdev)
+- Example: "@htekdev Critical security vulnerability found - requires human review"
+- Example: "@htekdev Architecture decision needed: current approach doesn't scale"
 
 **Production Ready** - No mentions needed:
 - When everything passes all checks
