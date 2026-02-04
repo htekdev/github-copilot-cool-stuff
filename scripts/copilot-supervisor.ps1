@@ -1,12 +1,20 @@
 <#
 .SYNOPSIS
-    Supervisor agent that monitors Copilot's work and launches comprehensive PR review sessions.
+    Speckit supervisor agent that monitors coding agent PRs and validates implementations locally.
 
 .DESCRIPTION
-    Waits for Copilot to finish coding, then launches a new Copilot CLI session in a temp folder
-    to perform a full PR review. Copilot uses its GitHub tools to checkout the PR, verify spec
-    compliance, check tests, validate code coverage, and ensure the app works. Posts comments
-    on the PR if any gaps are found.
+    Works within the speckit workflow where specs/planning/tasking are defined locally, then
+    implementation is delegated to a coding agent via PR. This script:
+    
+    1. Waits for the coding agent to finish (checks for unchecked tasks, "still working" mentions)
+    2. If PR indicates incomplete work, lets the agent continue
+    3. Once PR appears complete, clones/checkouts locally to validate the implementation
+    4. Runs tests, verifies acceptance criteria, checks the solution actually works
+    5. If issues found: fixes them locally, pushes changes, and reports findings to drift.md
+    6. If everything verifiable passes: exits successfully
+    
+    The drift.md file captures context drift and spec refinements discovered during validation.
+    The agent discovers the spec file based on the drift file location (typically in same directory).
 
 .PARAMETER Owner
     GitHub repository owner
@@ -17,8 +25,8 @@
 .PARAMETER PRNumber
     Pull request number to supervise
 
-.PARAMETER SpecFile
-    Path to the specification file that defines requirements
+.PARAMETER DriftFile
+    Path to the drift.md file for reporting context drift and spec refinements (created if missing)
 
 .PARAMETER PollIntervalSeconds
     How often to check PR status (default: 30 seconds)
@@ -27,7 +35,7 @@
     GitHub PAT (uses 'gh auth token' if not provided)
 
 .EXAMPLE
-    .\copilot-supervisor.ps1 -Owner htekdev -Repo myrepo -PRNumber 1 -SpecFile ./spec.md
+    .\copilot-supervisor.ps1 -Owner htekdev -Repo myrepo -PRNumber 1 -DriftFile ./drift.md
 #>
 
 param(
@@ -41,7 +49,7 @@ param(
     [int]$PRNumber,
     
     [Parameter(Mandatory=$true)]
-    [string]$SpecFile,
+    [string]$DriftFile,
     
     [Parameter(Mandatory=$false)]
     [int]$PollIntervalSeconds = 30,
@@ -77,14 +85,8 @@ $headers = @{
 
 $baseUrl = "https://api.github.com/repos/$Owner/$Repo"
 
-# Validate spec file exists
-if (-not (Test-Path $SpecFile)) {
-    Write-Error "Spec file not found: $SpecFile"
-    exit 1
-}
-
-# Read spec file content
-$specContent = Get-Content $SpecFile -Raw
+# Resolve drift file path (may not exist yet)
+$driftFullPath = [System.IO.Path]::GetFullPath($DriftFile)
 
 function Get-PRTimeline {
     param([int]$PRNum)
@@ -151,11 +153,11 @@ function Get-PRDetails {
 # Main loop
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  Copilot Supervisor Agent" -ForegroundColor Cyan
+Write-Host "  Speckit Supervisor Agent" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  Repository:    $Owner/$Repo"
 Write-Host "  PR Number:     #$PRNumber"
-Write-Host "  Spec File:     $SpecFile"
+Write-Host "  Drift File:    $driftFullPath"
 Write-Host "  Poll Interval: ${PollIntervalSeconds}s"
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
@@ -191,10 +193,10 @@ while ($true) {
     
     if ($status.IsDone -and $status.FinishedCount -gt $lastHandledFinishedCount) {
         Write-Host ""
-        Write-Host "*** COPILOT FINISHED - LAUNCHING REVIEW ***" -ForegroundColor Green
+        Write-Host "*** COPILOT CODING AGENT FINISHED - LAUNCHING SUPERVISOR ***" -ForegroundColor Green
         Write-Host ""
         
-        # Create temp folder for Copilot session
+        # Create temp folder for local validation
         try {
             $tempFolderPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.Guid]::NewGuid().ToString())
             $tempFolder = New-Item -ItemType Directory -Path $tempFolderPath -ErrorAction Stop
@@ -210,72 +212,92 @@ while ($true) {
             # Change to temp folder
             Push-Location $tempFolder.FullName
             
-            # Build comprehensive review prompt for Copilot
-            $reviewPrompt = @"
-You are a supervisor agent reviewing PR #$PRNumber in $Owner/$Repo.
+            # Build the supervisor prompt for Copilot - agent decides everything
+            $supervisorPrompt = @"
+You are a speckit supervisor agent for PR #$PRNumber in $Owner/$Repo.
 
-Your task is to perform a comprehensive review to bring this PR to full production readiness. Use your GitHub tools to checkout the PR, examine the code, run tests, and verify everything works.
+CONTEXT:
+- Specs/planning/tasking are defined locally, implementation is delegated to a coding agent via this PR
+- The coding agent has signaled it finished a work session
+- Your job is to supervise, validate, and ensure the implementation is complete and working
 
-SPECIFICATION:
-$specContent
+DRIFT FILE PATH:
+$driftFullPath
 
-YOUR REVIEW CHECKLIST:
-1. Checkout the PR and examine all changes
-2. Verify the implementation matches the specification requirements
-3. Run all tests and ensure they pass
-4. Check code coverage is high (aim for >80%)
-5. Verify the application actually works (run it if possible)
-6. Ensure the specification is well-documented on completion
-7. Look for any security vulnerabilities or code quality issues
-8. Validate all claims made in commit messages and PR description
+The drift file location tells you where the spec files are (same directory). Look for spec.md, requirements.md, or similar files in that directory to understand the requirements.
 
-WHEN TO POST COMMENTS:
+IMPORTANT: The tasks.md file with the implementation task list is only in the PR branch, not locally. You must check the PR files or checkout the branch to see task completion status.
 
-If you find gaps or issues that the coding agent can fix:
-- Post a comment starting with "@copilot" followed by specific instructions
-- Example: "@copilot Please add unit tests for the authentication module to reach 80% coverage"
-- Example: "@copilot The login endpoint is missing input validation as specified in requirements"
+=== YOUR WORKFLOW ===
 
-If you find critical issues requiring human review or decisions:
-- Post a comment starting with "@$Owner" (the repository owner)
-- Example: "@$Owner Critical security vulnerability found in authentication - requires human review"
-- Example: "@$Owner Architecture decision needed: current approach doesn't scale as per spec"
+PHASE 1: CHECK IF CODING AGENT IS ACTUALLY DONE
+First, examine the PR to determine if the coding agent has truly completed implementation:
+- Check the PR files for tasks.md - look for unchecked task boxes (- [ ])
+- Check the PR description for unchecked task boxes
+- Check recent comments for signals like "still working", "in progress", "WIP", "not done yet"
+- Look at the code changes - are there TODO comments or incomplete implementations?
 
-If everything looks good and production-ready:
-- Post a comment confirming the PR is ready (no @mentions needed)
-- Highlight what was verified (tests passing, coverage, app working, etc.)
-- Example: "✅ PR is production-ready. All tests pass, 85% coverage, app verified working, spec compliant."
+IF THE CODING AGENT IS NOT DONE:
+- Post a comment: "@copilot Please continue working on the remaining tasks. [list specific incomplete items you found]"
+- Exit - the script will continue monitoring and call you again when the agent finishes
 
-Use your full capabilities and GitHub tools to perform this review autonomously. Make all decisions on your own.
-"@
+PHASE 2: LOCAL VALIDATION (only if Phase 1 indicates completion)
+Clone and test the implementation locally:
+- Clone $Owner/$Repo to this temp folder
+- Checkout the PR branch: gh pr checkout $PRNumber
+- Build the project and check for errors
+- Run all tests
+- Verify acceptance criteria from the spec actually work
+- Check the implementation matches spec requirements
+
+PHASE 3: FIX ISSUES (if validation finds problems)
+If you find issues you can fix:
+- Make the code changes
+- Commit with a clear message
+- Push to the PR branch
+- Continue validation
+
+PHASE 4: REPORT FINDINGS
+Update the drift file at: $driftFullPath
+
+Format as markdown with these sections:
+## Context Drift
+(things that changed or differ from the original spec)
+
+## Spec Refinements  
+(clarifications or additions the spec needs based on what you learned)
+
+## Validation Results
+- Build: [PASS/FAIL]
+- Tests: [PASS/FAIL] (X passed, Y failed)
+- Acceptance Criteria: [list each and PASS/FAIL]
+
+## Manual Verification Needed
+(items requiring human review that you couldn't automatically verify)
+
+## Fixes Applied
+(any fixes you made during validation)
+
+PHASE 5: EXIT DECISION
+- If everything verifiable passes: Exit with success summary
+- If critical issues remain that you cannot fix: Post a comment tagging @$Owner for human review
+
+IMPORTANT: You make ALL decisions. The script just waits for the coding agent to signal completion and launches you.
+"@ -replace "`"", "'"
             
-            Write-Host "Launching Copilot CLI for comprehensive review..." -ForegroundColor Cyan
+            Write-Host "Launching Copilot CLI supervisor session..." -ForegroundColor Cyan
             Write-Host ""
             
-            # Create temp file for prompt to avoid shell injection
-            $tempPromptFile = New-TemporaryFile
-            $reviewPrompt | Out-File -FilePath $tempPromptFile.FullName -Encoding UTF8
+            # Launch Copilot CLI to review and decide next steps
             
-            try {
-                # Launch Copilot CLI with the review prompt from file
-                $copilotOutput = copilot -p "$(Get-Content $tempPromptFile.FullName -Raw)" 2>&1
-                
-                # Check if command succeeded
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Warning "Copilot CLI exited with code $LASTEXITCODE"
-                    Write-Host "Output: $copilotOutput" -ForegroundColor Yellow
-                }
-            }
-            catch {
-                Write-Error "Failed to launch Copilot CLI: $_"
-                Write-Host "Make sure Copilot CLI is installed and you're authenticated." -ForegroundColor Yellow
-            }
-            finally {
-                Remove-Item $tempPromptFile.FullName -ErrorAction SilentlyContinue
-            }
+            $cmd = "copilot -p `$supervisorPrompt --yolo"
+            Write-Host "Running: $cmd" -ForegroundColor Gray
+            Write-Host ""
+            
+            Invoke-Expression $cmd
             
             Write-Host ""
-            Write-Host "Review session completed" -ForegroundColor Green
+            Write-Host "Supervisor session completed" -ForegroundColor Green
         }
         finally {
             # Return to original location and cleanup

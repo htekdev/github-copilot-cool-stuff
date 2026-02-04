@@ -1,0 +1,217 @@
+<#
+.SYNOPSIS
+    Monitors a PR for Copilot completion and verifies implementation against speckit specs.
+
+.DESCRIPTION
+    Watches a PR for the 'copilot_work_finished' event. When detected, launches
+    a new Copilot CLI session to verify the implementation against speckit spec files.
+
+.PARAMETER Owner
+    GitHub repository owner
+
+.PARAMETER Repo
+    GitHub repository name
+
+.PARAMETER PRNumber
+    Pull request number to monitor
+
+.PARAMETER PollIntervalSeconds
+    How often to check PR status (default: 30 seconds)
+
+.PARAMETER GithubToken
+    GitHub PAT (uses 'gh auth token' if not provided)
+
+.EXAMPLE
+    .\copilot-speckit-monitor.ps1 -Owner htekdev -Repo my-project -PRNumber 1
+#>
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$Owner,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$Repo,
+    
+    [Parameter(Mandatory=$true)]
+    [int]$PRNumber,
+    
+    [Parameter(Mandatory=$false)]
+    [int]$PollIntervalSeconds = 30,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$GithubToken
+)
+
+# Get token from gh CLI if not provided
+if (-not $GithubToken) {
+    $GithubToken = gh auth token 2>$null
+    if (-not $GithubToken) {
+        Write-Error "GitHub token required. Run 'gh auth login' or use -GithubToken parameter."
+        exit 1
+    }
+}
+
+$headers = @{
+    "Authorization" = "Bearer $GithubToken"
+    "Accept" = "application/vnd.github+json"
+    "X-GitHub-Api-Version" = "2022-11-28"
+}
+
+$baseUrl = "https://api.github.com/repos/$Owner/$Repo"
+
+function Get-PRTimeline {
+    param([int]$PRNum)
+    
+    $allEvents = @()
+    $page = 1
+    
+    try {
+        while ($true) {
+            $response = Invoke-WebRequest -Uri "$baseUrl/issues/$PRNum/timeline?per_page=100&page=$page" -Headers $headers -Method Get
+            $events = $response.Content | ConvertFrom-Json
+            
+            if ($events.Count -eq 0) { break }
+            
+            $allEvents += $events
+            
+            # Check for next page via Link header
+            $linkHeader = $response.Headers["Link"]
+            if (-not $linkHeader -or $linkHeader -notmatch 'rel="next"') { break }
+            
+            $page++
+        }
+    }
+    catch {
+        Write-Warning "Error fetching timeline: $_"
+    }
+    
+    return $allEvents
+}
+
+function Get-CopilotWorkStatus {
+    param([array]$Timeline)
+    
+    $startedCount = @($Timeline | Where-Object { $_.event -eq "copilot_work_started" }).Count
+    $finishedCount = @($Timeline | Where-Object { $_.event -eq "copilot_work_finished" }).Count
+    
+    # Push/pop: started = push, finished = pop
+    # If counts are equal, Copilot is done
+    # If started > finished, still working
+    $isDone = $startedCount -eq $finishedCount -and $finishedCount -gt 0
+    
+    return @{
+        IsDone = $isDone
+        StartedCount = $startedCount
+        FinishedCount = $finishedCount
+    }
+}
+
+function Get-PRDetails {
+    param([int]$PRNum)
+    
+    try {
+        return Invoke-RestMethod -Uri "$baseUrl/pulls/$PRNum" -Headers $headers -Method Get
+    }
+    catch {
+        Write-Warning "Error fetching PR: $_"
+        return $null
+    }
+}
+
+# Main loop
+Write-Host ""
+Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host "  Copilot Speckit Monitor" -ForegroundColor Cyan
+Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host "  Repository: $Owner/$Repo"
+Write-Host "  PR Number:  #$PRNumber"
+Write-Host "  Poll interval: ${PollIntervalSeconds}s"
+Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host ""
+
+# Get initial state
+$pr = Get-PRDetails -PRNum $PRNumber
+if (-not $pr) {
+    Write-Error "Could not find PR #$PRNumber"
+    exit 1
+}
+
+Write-Host "Monitoring: $($pr.title)" -ForegroundColor Cyan
+Write-Host ""
+
+# The prompt to send to Copilot when work is finished
+$reviewPrompt = @"
+Review PR #$PRNumber in $Owner/$Repo and verify the implementation against the speckit specification.
+
+This project uses speckit for specifications. Find the spec files (look for speckit.yaml, speckit.yml, spec.md, *.spec.md, or spec/specs/.speckit directories) and verify the implementation matches the requirements.
+
+## Your Task:
+1. Locate the speckit specification file(s) in the repository
+2. Read and understand the requirements from the spec
+3. Review the implementation in the PR against the spec
+4. Check for:
+   - Missing features/requirements from the spec
+   - Implementation that doesn't match the spec
+   - Any spec sections not yet implemented
+
+## Next Steps:
+If there are unimplemented spec requirements:
+- Post a comment on the PR with '@copilot Please implement: <specific requirement from spec>'
+
+If the implementation doesn't match the spec:
+- Post a comment on the PR with '@copilot The implementation of <feature> doesn't match the spec. Please fix: <specific issue>'
+
+If all spec requirements are implemented correctly:
+- Let me know the implementation is complete and matches the specification so I can review and test locally
+"@
+
+$lastHandledFinishedCount = 0
+$firstCheck = $true
+
+while ($true) {
+    $timestamp = Get-Date -Format 'HH:mm:ss'
+    
+    # Check PR state
+    $pr = Get-PRDetails -PRNum $PRNumber
+    if ($pr.state -ne "open") {
+        Write-Host "[$timestamp] PR is no longer open. Exiting." -ForegroundColor Yellow
+        break
+    }
+    
+    # Check Copilot work status
+    $timeline = Get-PRTimeline -PRNum $PRNumber
+    $status = Get-CopilotWorkStatus -Timeline $timeline
+    
+    Write-Host "[$timestamp] Started: $($status.StartedCount) | Finished: $($status.FinishedCount)" -ForegroundColor Gray
+    
+    if ($status.IsDone -and $status.FinishedCount -gt $lastHandledFinishedCount) {
+        Write-Host ""
+        Write-Host "*** COPILOT FINISHED! ***" -ForegroundColor Green
+        Write-Host ""
+        
+        Write-Host "Launching Copilot to verify implementation against speckit spec..." -ForegroundColor Cyan
+        Write-Host ""
+        
+        # Launch Copilot CLI to review and decide next steps
+        $cmd = "copilot --yolo -p `"$reviewPrompt`""
+        Write-Host "Running: $cmd" -ForegroundColor Gray
+        Write-Host ""
+        
+        Invoke-Expression $cmd
+        
+        # Mark as handled
+        $lastHandledFinishedCount = $status.FinishedCount
+        
+        Write-Host ""
+        Write-Host "Continuing to monitor..." -ForegroundColor Cyan
+        Write-Host ""
+    }
+    
+    # Wait before next check (skip on first iteration)
+    if ($firstCheck) {
+        $firstCheck = $false
+    }
+    else {
+        Start-Sleep -Seconds $PollIntervalSeconds
+    }
+}
